@@ -1,0 +1,332 @@
+rm(list=ls())
+library(GEOquery)
+library(dplyr)
+library(magrittr)
+library(ggplot2)
+library(FactoMineR)
+library(factoextra)
+library(sva)
+library(limma)
+
+##Download Datasets
+GSE100054_set <- getGEO("GSE100054",destdir = ".",
+               AnnotGPL = F,     ## 注释文件
+               getGPL = F)  ## 平台文件 
+GSE6613_set <- getGEO("GSE6613",destdir = ".",
+                       AnnotGPL = F,     ## 注释文件
+                       getGPL = F)  ## 平台文件
+GSE54536_set <- getGEO("GSE54536",destdir = ".",
+                      AnnotGPL = F,     ## 注释文件
+                      getGPL = F)  ## 平台文件
+
+
+# exprs()提取matrix；pData提取group info
+GSE100054 <- exprs(GSE100054_set$GSE100054_series_matrix.txt.gz)
+GSE100054 <- as.data.frame(GSE100054)
+PD100054 <- pData(GSE100054_set$GSE100054_series_matrix.txt.gz)
+range(GSE100054)
+
+GSE6613 <- exprs(GSE6613_set$GSE6613_series_matrix.txt.gz)
+GSE6613 <- as.data.frame(GSE6613)
+PD6613 <- pData(GSE6613_set$GSE6613_series_matrix.txt.gz)
+range(GSE6613)
+GSE6613 <- log(GSE6613 + 1)
+
+GSE54536 <- exprs(GSE54536_set$GSE54536_series_matrix.txt.gz)
+GSE54536 <- as.data.frame(GSE54536)
+PD54536 <- pData(GSE54536_set$GSE54536_series_matrix.txt.gz)
+GSE54536 <- GSE54536 - apply(GSE54536,1,min)
+range(GSE54536)
+GSE54536 <- log(GSE54536 + 1)
+
+
+##GSE Platform
+GSE100054_set$GSE100054_series_matrix.txt.gz$platform_id #GPL23126
+anno <- read.csv('GPL23126-131.csv')
+anno$Gene_symbol <- strsplit(anno$gene_assignment, split = " /// ") %>% lapply(function(x){
+  # x = strsplit(dat$gene_assignment[70750:70753], split = " /// ")[[1]]
+  x1 <- x
+  if(length(x1) > 1) x1 <- x1[!grepl("^OTTHU", x1)]
+  if(length(x1) == 0) x1 <- x[1]
+  vec_gene = strsplit(x, split = " // ") %>% lapply(function(x) if(length(x) > 1) return(x[2]) else return(x)) %>%
+    unlist() %>% unique()
+  vec_gene <- vec_gene[!grepl("^OTTHU", vec_gene)]
+  vec_gene <- paste0(vec_gene, collapse = " // ")
+  return(vec_gene)
+}) %>% unlist()
+
+GSE6613_set$GSE6613_series_matrix.txt.gz$platform_id #GPL96
+bnno <- read.csv('GPL96-57554.csv')
+
+GSE54536_set$GSE54536_series_matrix.txt.gz$platform_id #GPL10558
+cnno <- read.csv('GPL10558-50081.csv')
+
+##Group Information
+#把数据集GSE100054的矩阵和分组情况保存下来
+PD100054 <- PD100054[,c(2,1)]
+colnames(PD100054)[2] <- 'Group'
+PD100054$Group <- c(rep('Control',9),rep('PD',10))
+
+#把数据集GSE6613的矩阵和分组情况保存下来
+PD6613 <- PD6613[,c(2,10)]
+colnames(PD6613)[2] <- 'Group'
+PD6613$Group <- gsub("Parkinson's disease",
+                       "PD",PD6613$Group,fixed = TRUE)
+PD6613$Group <- gsub("healthy control",
+                     "Control",PD6613$Group,fixed = TRUE)
+PD6613 <- PD6613[PD6613$Group != "neurological disease control",]
+PD6613 <- PD6613[order(PD6613$Group),]
+
+#把数据集GSE54536的矩阵和分组情况保存下来
+PD54536 <- PD54536[,c(2,1)]
+colnames(PD54536)[2] <- 'Group'
+PD54536 <- PD54536[-c(5,10),]
+PD54536$Group <- c(rep('PD',4),rep('Control',4))
+PD54536 <- PD54536[order(PD54536$Group),]
+
+
+#把pd里和dat里取交集 然后糅合到一起 删除dat多余的没pd那些样本的数据（因为pd只有一些数据，dat有很多。）
+GSE100054 <- GSE100054[,match(PD100054$geo_accession,colnames(GSE100054))]
+GSE6613 <- GSE6613[,match(PD6613$geo_accession,colnames(GSE6613))]
+GSE54536 <- GSE54536[,match(PD54536$geo_accession,colnames(GSE54536))]
+
+
+#把GSE55098平台探针替换成Gene symbol
+GPLanno <- anno[,c("ID", "Gene_symbol")]
+colnames(GPLanno)[2] <- 'symbol'
+GSE100054$ID <- rownames(GSE100054)
+GSE100054 <- merge(GPLanno, GSE100054, by='ID',all.x=T,all.y=T)
+GSE100054 <- aggregate(x=GSE100054, by = GSE100054$symbol %>% list(),FUN = mean)#多个探针对应一个基因取平均
+rownames(GSE100054) = GSE100054$Group.1 #把Symbol变成行名
+GSE100054 <- GSE100054[,-(1:3)]
+GSE100054 <- na.omit(GSE100054)
+
+#把GSE9006平台探针替换成Gene Symbol
+GPLbnno <- bnno[,c("ID", "Gene.Symbol")]
+colnames(GPLbnno)[2] <- 'symbol'
+
+GSE6613$ID <- rownames(GSE6613)
+GSE6613 <- merge(GPLbnno, GSE6613, by='ID',all.x=T,all.y=T)
+GSE6613 <- aggregate(x=GSE6613, by = GSE6613$symbol %>% list(),FUN = mean)#多个探针对应一个基因取平均
+rownames(GSE6613) = GSE6613$Group.1 #把Symbol变成行名
+GSE6613 <- GSE6613[,-(1:3)]
+GSE6613 <- na.omit(GSE6613)
+
+#把GSE54536平台探针替换成Gene Symbol
+GPLcnno <- cnno[,c("ID", "Symbol")]
+colnames(GPLcnno)[2] <- 'symbol'
+
+GSE54536$ID <- rownames(GSE54536)
+GSE54536 <- merge(GPLcnno, GSE54536, by='ID',all.x=T,all.y=T)
+GSE54536 <- aggregate(x=GSE54536, by = GSE54536$symbol %>% list(),FUN = mean)#多个探针对应一个基因取平均
+rownames(GSE54536) = GSE54536$Group.1 #把Symbol变成行名
+GSE54536 <- GSE54536[,-(1:3)]
+GSE54536 <- na.omit(GSE54536)
+
+###Combined Datasets######
+##寻找2个数据集中都有的基因
+genes <- Reduce(intersect,list(rownames(GSE100054),rownames(GSE6613),rownames(GSE54536)))
+GSE100054 <- GSE100054[genes,]
+GSE6613 <- GSE6613[genes,]
+GSE54536 <- GSE54536[genes,]
+
+combined_gse <- cbind(GSE100054,GSE6613,GSE54536)
+combined_pd <- rbind(PD100054,PD6613,PD54536)
+write.csv(combined_gse,'combined_gse_before.csv')
+
+###画校准前后的Boxplot和PCA######
+##Set Theme
+mytheme <- 
+  theme(plot.margin = margin(0.1, 0.1, 0.1, 0.1, "cm"), # 图像
+        plot.title = element_text(size = 7)) + 
+  theme(panel.background = element_blank(), # 面板
+        panel.grid = element_blank(),
+        panel.borde = element_rect(fill = NA, size = 0.75 * 0.47)) + # 添加外框
+  theme(axis.line = element_line(size = 0.75 * 0.47), # 坐标轴
+        axis.text = element_text(size = 6, color = "black"), # 坐标文字为黑色
+        axis.title = element_text(size = 6),
+        axis.ticks = element_line(size = 0.75 * 0.47)) +
+  theme(legend.key = element_rect(fill = "white"),
+        legend.key.size = unit(c(0.3, 0.3), "cm"), # 图注
+        legend.title = element_text(size = 6),
+        legend.text = element_text(size = 6),
+        legend.margin = margin(),
+        legend.box.margin = margin(),
+        legend.box.spacing = unit(0, "cm"),
+        legend.background = element_blank(), legend.spacing = unit(0, "cm"),
+        legend.box.background = element_blank())
+
+##画矫正前的boxplot图
+#转长数据
+dat_before <- cbind(rownames(combined_gse),combined_gse)
+rownames(dat_before) <- NULL
+colnames(dat_before)[1] <- "Gene"
+
+sample_group <- combined_pd
+rownames(sample_group) <- NULL
+sample_group$Group <- c(rep("GSE100054",19),rep("GSE6613",72),rep("GSE54536",8))
+dat_before_long <- dat_before %>% 
+  tibble::column_to_rownames("Gene") %>% t() %>% 
+  data.frame() %>% 
+  dplyr::mutate(sample = rownames(.)) %>% 
+  merge(sample_group, by.x = "sample", by.y = "geo_accession") %>% 
+  tidyr::gather(key = geneid, value, -c(sample, Group))
+range(GSE100054)
+range(GSE54536)
+range(GSE6613)
+
+
+#Before Boxplot绘图
+boxplot_before <- 
+  ggplot(dat_before_long, aes(sample, value)) + # 映射样本和表达量
+  geom_boxplot(aes(fill = Group), lwd = 0.1 *0.47, outlier.shape = NA) + # 以分组填充颜色，不要离群点
+  scale_fill_manual(values = c("GSE100054"= "#FEB669","GSE54536" = "#8D7E93","GSE6613" = "#6EA786"))+
+  labs(title = "Before Normalization") + 
+  mytheme + # 自己的主题
+  theme(legend.position = 'top', # 图注位置（上）
+        legend.direction = "horizontal", # 图注方向（水平）
+        legend.title = element_blank(), # 隐藏图注标签
+        axis.title.x = element_blank(), # 隐藏x轴标签
+        axis.title.y = element_blank(), # 隐藏y轴标签
+        axis.text.x = element_blank(), # 隐藏x轴内容
+        axis.ticks.x = element_blank()) + # 隐藏x轴刻度线
+        # axis.text.x = element_text(angle = 90, hjust = 1, vjust = .5)) + # 隐藏x轴刻度线
+  scale_y_continuous(limits = c(0,15),
+                     # breaks = c(seq(150, 450,by = 50)), 
+                     expand = c(0,0)) +
+  coord_cartesian(clip = "off")# 解决上右框线看起来浅的问题
+boxplot_before
+ggsave("1-Boxpot_Before.pdf", plot = boxplot_before, units = "cm",width = 8.1,height = 5) 
+
+#BiocManager::install("sva")
+#数据矫正
+
+#  "1"代表GSE55098,"2"代表GSE9006
+batch <- c(rep("1",19),rep("2",72),rep("3",8))
+
+#去除批次效应
+adjusted_gse <- ComBat(combined_gse, batch=batch) 
+#标准化
+adjusted_gse <- normalizeBetweenArrays(adjusted_gse)
+
+
+#画矫正后的boxplot图
+#转长数据
+adjusted_gse <- as.data.frame(adjusted_gse)
+dat_after <- cbind(rownames(adjusted_gse),adjusted_gse)
+rownames(dat_after) <- NULL
+colnames(dat_after)[1] <- "Gene"
+
+dat_after_long <- dat_after %>% 
+  tibble::column_to_rownames("Gene") %>% t() %>% 
+  data.frame() %>% 
+  dplyr::mutate(sample = rownames(.)) %>% 
+  merge(sample_group, by.x = "sample", by.y = "geo_accession") %>% 
+  tidyr::gather(key = geneid, value, -c(sample, Group))
+
+#After Boxplot绘图
+boxplot_after <- 
+  ggplot(dat_after_long, aes(sample, value)) + # 映射样本和表达量
+  geom_boxplot(aes(fill = Group), lwd = 0.1 *0.47, outlier.shape = NA) + # 以分组填充颜色，不要离群点
+  scale_fill_manual(values = c("GSE100054"= "#FEB669","GSE54536" = "#8D7E93","GSE6613" = "#6EA786")) +
+  labs(title = "After Normalization") + 
+  mytheme + # 自己的主题
+  theme(legend.position = 'top', # 图注位置（上）
+        legend.direction = "horizontal", # 图注方向（水平）
+        legend.title = element_blank(), # 隐藏图注标签
+        axis.title.x = element_blank(), # 隐藏x轴标签
+        axis.title.y = element_blank(), # 隐藏y轴标签
+        axis.text.x = element_blank(), # 隐藏x轴内容
+        axis.ticks.x = element_blank())+
+        # axis.text.x = element_text(angle = 90, hjust = 1, vjust = .5)) + # 90度旋转标签
+  scale_y_continuous(limits = c(0,12),
+                     # breaks = c(seq(150, 450,by = 50)), 
+                     expand = c(0,0)) +
+  coord_cartesian(clip = "off")
+boxplot_after
+ggsave("2-Boxplot_After.pdf", plot = boxplot_after, units = "cm",width = 8.1,height = 5) 
+
+
+#绘制矫正前的PCA图
+matrix_before <- as.matrix(t(combined_gse))
+cla <- c(rep("GSE100054",19),rep("GSE6613",72),rep("GSE54536",8))
+iris.pca_before <- PCA(matrix_before,graph = F,scale.unit = TRUE)
+
+pdf("3-PCA_Before.pdf",width = 6,height = 4.5)
+ind.p_before <- fviz_pca_ind(iris.pca_before,geom.ind = "point", col.ind = cla,
+                             palette = c("GSE100054"= "#FEB669","GSE54536" = "#8D7E93","GSE6613" = "#6EA786"),
+                             addEllipses = TRUE,
+                             legend.title = "Group" )
+ggpubr::ggpar(ind.p_before,title = "Before Normalization",ggtheme = theme_bw())
+dev.off()
+#矫正前的3D PCA图
+# library(Rtsne)
+# tSNE_res <- Rtsne(matrix_before,
+#                   dims=3,
+#                   perplexity=5,
+#                   verbose=F,
+#                   max_iter=500,
+#                   check_duplicates=F)
+# tsne <- data.frame(tSNE1 = tSNE_res[["Y"]][,1],
+#                    tSNE2 = tSNE_res[["Y"]][,2],
+#                    tSNE3 = tSNE_res[["Y"]][,3],
+#                    cluster = cla)
+
+# tsne$colors <- ifelse(tsne$cluster %in% "GSE92681","#eea2a4",ifelse(tsne$cluster %in% "GSE77459","#7f9eb2","#B8DADC"))
+# colnames(tsne) <- c("x","y","z","cluster","colors")
+# tsne$cluster <- as.factor(tsne$cluster)
+# pdf("3-PCA_Before.pdf",width = 8.1,height = 6)
+# library(scatterplot3d)
+# pca_before <- scatterplot3d(tsne[,1:3],color = tsne$colors,main="Before Normalization",pch = 21,bg = tsne$colors)
+# legend("bottom",col = "black", legend = levels(tsne$cluster),
+#        pt.bg = c("#baccd9","#eea2a4","#F0A274"),
+#        pch = 21, inset = -0.2, xpd = TRUE, horiz = TRUE)
+# dev.off()
+
+#绘制矫正后的PCA图
+matrix_after <- as.matrix(t(adjusted_gse))
+iris.pca_after <- PCA(matrix_after,graph =F)
+pdf("4-PCA_After.pdf",width = 6,height = 4.5)
+ind.p_after <- fviz_pca_ind(iris.pca_after,geom.ind = "point", col.ind = cla,
+                            palette = c("GSE100054"= "#FEB669","GSE54536" = "#8D7E93","GSE6613" = "#6EA786"),
+                            addEllipses = TRUE,
+                            legend.title = "Group")
+ggpubr::ggpar(ind.p_after,title = "After Normalization",ggtheme = theme_bw())
+dev.off()
+
+#矫正后的3D PCA图
+# tSNE_res <- Rtsne(matrix_after,
+#                   dims=3,
+#                   perplexity=5,
+#                   verbose=F,
+#                   max_iter=500,
+#                   check_duplicates=F)
+# tsne <- data.frame(tSNE1 = tSNE_res[["Y"]][,1],
+#                    tSNE2 = tSNE_res[["Y"]][,2],
+#                    tSNE3 = tSNE_res[["Y"]][,3],
+#                    cluster = cla)
+
+# tsne$colors <- ifelse(tsne$cluster %in% "GSE80178","#eea2a4",ifelse(tsne$cluster %in% "GSE147890","#baccd9","#B8DADC"))
+# colnames(tsne) <- c("x","y","z","cluster","colors")
+# tsne$cluster <- as.factor(tsne$cluster)
+# pdf("4-PCA_After.pdf",width = 8.1,height = 6)
+# pca_after <- scatterplot3d(tsne[,1:3],color = tsne$colors,main="After Normalization",pch = 21,bg = tsne$colors)
+# legend("bottom",col = "black", legend = levels(tsne$cluster),pt.bg = c("#baccd9","#eea2a4","#800080"), pch = 21,
+#        inset = -0.2, xpd = TRUE, horiz = TRUE)
+# dev.off()
+
+#制作合并数据集的分组信息
+adjusted_pd <- combined_pd
+#对合并数据集的分组进行排序，Normal在前，RS样本在后
+adjusted_pd <- adjusted_pd[order(adjusted_pd$Group,decreasing = F),]
+#保存合并数据集的分组信息
+write.csv(adjusted_pd,"Combined_Datasets_Group.csv",row.names = F)
+
+#根据合并数据集的分组信息对合并数据集样本进行重新排列
+adjusted_gse<-adjusted_gse[,adjusted_pd$geo_accession] #对合并数据集样本进行重新排列
+write.csv(adjusted_gse,"Combined_Datasets_Matrix.csv")
+
+write.csv(adjusted_gse[,adjusted_pd$Group == "PD"],"Disease_Matrix.csv")
+
+table(adjusted_pd$Group)
+###END#####
