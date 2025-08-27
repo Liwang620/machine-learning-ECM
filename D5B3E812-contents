@@ -1,0 +1,89 @@
+rm(list = ls())
+library(dplyr)
+
+#确认样本数量 alive = 0, dead = 1
+id <- readxl::read_xlsx("TCGA-BRCA_sampleid.xlsx")
+clinical_old <- readxl::read_xlsx("TCGA-BRCA_Clinical_old.xlsx")
+#去掉没有分组信息肿瘤和正常分组信息的样本
+clinical_old <- clinical_old[!is.na(clinical_old$status),]
+table(clinical_old$status)
+BRCA <- clinical_old[clinical_old$status == "Tumor",]
+BRCA <- BRCA[,c(1,2,6,321,322,318,320,299:301)]
+BRCA <- BRCA[BRCA$RNAseq样本编号 %in% id$sample_id,]
+
+setdiff(id$sample_id,BRCA$RNAseq样本编号)
+#[1] "TCGA-A8-A09C-01A-11R-A00Z-07" "TCGA-BH-A0BS-01A-11R-A12P-07"
+#[3] "TCGA-E2-A14S-01A-11R-A12D-07" "TCGA-LD-A7W5-01A-22R-A352-07"
+
+grep("TCGA-A8-A09C-01A-11R-A00Z-07",id$sample_id)
+# [1] 233
+grep("TCGA-BH-A0BS-01A-11R-A12P-07",id$sample_id)
+# [1] 542
+grep("TCGA-E2-A14S-01A-11R-A12D-07",id$sample_id)
+# [1] 806
+grep("TCGA-LD-A7W5-01A-22R-A352-07",id$sample_id)
+# [1] 1014
+
+id <- id[c(233,542,806,1014),]
+id$sample <- stringr::str_sub(id$sample_id,1,12)
+
+clinical_new <- readxl::read_xlsx("TCGA-BRCA_Clinical_new.xlsx")
+clinical_new <- clinical_new[clinical_new$sample_id %in% id$sample,]
+write.csv(clinical_new,"new sample.csv")
+
+Control <- clinical_old[clinical_old$status == "Normal",]
+Control <- Control[,c(1,2,6,321,322,318,320,299:301)]
+
+BRCA$status <- gsub("Tumor","BRCA",BRCA$status)
+Control$status <- gsub("Normal","Control",Control$status)
+
+PD <- rbind(Control,BRCA)
+
+table(PD$stage_event.tnm_categories.pathologic_categories.pathologic_M)
+table(PD$stage_event.tnm_categories.pathologic_categories.pathologic_N)
+table(PD$stage_event.tnm_categories.pathologic_categories.pathologic_T)
+
+#特殊的肿瘤分型信息合并
+PD$stage_event.tnm_categories.pathologic_categories.pathologic_M <- gsub("cM0 (i+)", 
+                                                                     "M0", PD$stage_event.tnm_categories.pathologic_categories.pathologic_M, fixed = TRUE)
+
+PD$stage_event.tnm_categories.pathologic_categories.pathologic_N <- gsub("N0 (i-)", 
+                                                                         "N0", PD$stage_event.tnm_categories.pathologic_categories.pathologic_N, fixed = TRUE)
+PD$stage_event.tnm_categories.pathologic_categories.pathologic_N <- gsub("N0 (i+)", 
+                                                                         "N0", PD$stage_event.tnm_categories.pathologic_categories.pathologic_N, fixed = TRUE)
+PD$stage_event.tnm_categories.pathologic_categories.pathologic_N <- gsub("N0 (mol+)", 
+                                                                         "N0", PD$stage_event.tnm_categories.pathologic_categories.pathologic_N, fixed = TRUE)
+PD$stage_event.tnm_categories.pathologic_categories.pathologic_N <- gsub("N1a", 
+                                                                         "N1", PD$stage_event.tnm_categories.pathologic_categories.pathologic_N, fixed = TRUE)
+PD$stage_event.tnm_categories.pathologic_categories.pathologic_N <- gsub("N1b", 
+                                                                         "N1", PD$stage_event.tnm_categories.pathologic_categories.pathologic_N, fixed = TRUE)
+PD$stage_event.tnm_categories.pathologic_categories.pathologic_N <- gsub("N1c", 
+                                                                         "N1", PD$stage_event.tnm_categories.pathologic_categories.pathologic_N, fixed = TRUE)
+PD$stage_event.tnm_categories.pathologic_categories.pathologic_N <- gsub("N1mi", 
+                                                                         "N1", PD$stage_event.tnm_categories.pathologic_categories.pathologic_N, fixed = TRUE)
+PD$stage_event.tnm_categories.pathologic_categories.pathologic_N <- gsub("N2a", 
+                                                                     "N2", PD$stage_event.tnm_categories.pathologic_categories.pathologic_N, fixed = TRUE)
+PD$stage_event.tnm_categories.pathologic_categories.pathologic_N <- gsub("N3a", 
+                                                                         "N3", PD$stage_event.tnm_categories.pathologic_categories.pathologic_N, fixed = TRUE)
+PD$stage_event.tnm_categories.pathologic_categories.pathologic_N <- gsub("N3b", 
+                                                                         "N3", PD$stage_event.tnm_categories.pathologic_categories.pathologic_N, fixed = TRUE)
+PD$stage_event.tnm_categories.pathologic_categories.pathologic_N <- gsub("N3c", 
+                                                                         "N3", PD$stage_event.tnm_categories.pathologic_categories.pathologic_N, fixed = TRUE)
+
+PD$stage_event.tnm_categories.pathologic_categories.pathologic_T <- gsub("T1a", 
+                                                                         "T1", PD$stage_event.tnm_categories.pathologic_categories.pathologic_T, fixed = TRUE)
+PD$stage_event.tnm_categories.pathologic_categories.pathologic_T <- gsub("T1b", 
+                                                                         "T1", PD$stage_event.tnm_categories.pathologic_categories.pathologic_T, fixed = TRUE)
+PD$stage_event.tnm_categories.pathologic_categories.pathologic_T <- gsub("T1c", 
+                                                                         "T1", PD$stage_event.tnm_categories.pathologic_categories.pathologic_T, fixed = TRUE)
+PD$stage_event.tnm_categories.pathologic_categories.pathologic_T <- gsub("T2a", 
+                                                                         "T2", PD$stage_event.tnm_categories.pathologic_categories.pathologic_T, fixed = TRUE)
+PD$stage_event.tnm_categories.pathologic_categories.pathologic_T <- gsub("T2b", 
+                                                                         "T2", PD$stage_event.tnm_categories.pathologic_categories.pathologic_T, fixed = TRUE)
+PD$stage_event.tnm_categories.pathologic_categories.pathologic_T <- gsub("T3a", 
+                                                                         "T3", PD$stage_event.tnm_categories.pathologic_categories.pathologic_T, fixed = TRUE)
+PD$stage_event.tnm_categories.pathologic_categories.pathologic_T <- gsub("T4b", 
+                                                                         "T4", PD$stage_event.tnm_categories.pathologic_categories.pathologic_T, fixed = TRUE)
+PD$stage_event.tnm_categories.pathologic_categories.pathologic_T <- gsub("T4d", 
+                                                                         "T4", PD$stage_event.tnm_categories.pathologic_categories.pathologic_T, fixed = TRUE)
+write.csv(PD,"PD.csv",row.names = F)

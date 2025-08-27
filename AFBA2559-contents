@@ -1,0 +1,86 @@
+rm(list = ls())
+library(dplyr)
+
+###READ PD INFORMATION
+PD <- data.table::fread("PD.csv",data.table = F)
+colnames(PD)[1] <- "sample_id"
+
+###FPKM DATA######
+dat_fpkm <- data.table::fread("TCGA-BRCA_FPKM.txt",check.names = F,data.table = F)
+dat_fpkm <- aggregate(dat_fpkm, by = dat_fpkm$gene_id %>% list(),FUN = mean)
+rownames(dat_fpkm) <- dat_fpkm$Group.1
+dat_fpkm <- dat_fpkm[,-(1:2)]
+
+range(dat_fpkm)
+dat_fpkm <- log2(dat_fpkm+1)
+dat_fpkm_back <- dat_fpkm
+# colnames(dat_fpkm) <-  stringr::str_sub(colnames(dat_fpkm),1,12)
+
+dat_fpkm <- dat_fpkm[,PD$sample_id]
+write.csv(dat_fpkm[,PD$status == "BRCA"],"Disease_Matrix_FPKM.csv")
+write.csv(dat_fpkm,"Matrix_FPKM.csv")
+
+###COUNTS DATA######
+dat_counts <- data.table::fread("TCGA-BRCA_Counts.txt",check.names = F,data.table = F)
+dat_counts <- aggregate(dat_counts, by = dat_counts$gene_id %>% list(),FUN = mean)
+rownames(dat_counts) <- dat_counts$Group.1
+dat_counts <- dat_counts[,-(1:2)]
+# colnames(dat_counts) <-  stringr::str_sub(colnames(dat_counts),1,12)
+
+range(dat_counts)
+# dat_counts <- log2(dat_counts+1)
+dat_counts <- dat_counts[,PD$sample]
+# dat_counts <- dat_counts[,group_filter$status == "Tumor"]
+write.csv(dat_counts[,PD$status == "BRCA"],"Disease_Matrix_Counts.csv")
+write.csv(dat_counts,"Matrix_Counts.csv")
+
++###Visualization######
+mcrdegs <- data.table::fread("MCRDEGs.csv",data.table = F)
+lassoinput <- dat_fpkm_filter[mcrdegs$x,]
+lassoinput <- t(lassoinput)
+lassoinput <- lassoinput[group_filter$RNAseq样本编号,]
+lassoinput <- cbind(group_filter[,c(1,2,321,322)],lassoinput)
+lassoinput <- lassoinput[lassoinput$status == "Tumor",]
+write.csv(lassoinput[,-(1:2)],"LASSO_Input.csv",row.names = F)
+
+mcscore <- data.table::fread("1-MCScores_Group.csv",data.table = F)
+lassoriskscore <- readxl::read_xlsx("LASSO_RiskScore.xlsx")
+lassoid <- intersect(mcscore$V1,lassoriskscore$sample_id)
+multicoxinput <- group_filter[,c(1,2,291,320:322)]
+colnames(multicoxinput)[1] <- "id"
+lassoriskscore <- lassoriskscore[,c(1,13)]
+colnames(lassoriskscore)[1] <- "id"
+multicoxinput <- merge(multicoxinput,lassoriskscore, by = "id")
+colnames(mcscore)[1] <- "id"
+mcscore <- mcscore[,c(1,2)]
+multicoxinput <- merge(multicoxinput,mcscore,by = "id")
+
+multicoxinput <- multicoxinput[multicoxinput$status == "Tumor",]
+multicoxorder <- cbind(multicoxinput[,5:6],multicoxinput[,c(7,8,3,4)])
+colnames(multicoxorder)[2] <- "OS.time"
+colnames(multicoxorder)[3] <- "LASSO.RiskScore"
+colnames(multicoxorder)[4] <- "MCScore"
+colnames(multicoxorder)[5] <- "Stage"
+colnames(multicoxorder)[6] <- "Age"
+table(multicoxorder$Stage)
+multicoxorder$Stage <- stringr::str_extract(multicoxorder$Stage,"")
+write.csv(multicoxorder,"MultiCox_Input.csv",row.names = F)
+
+
+mrgs <- data.table::fread("MRGs.csv",data.table = F)
+crgs <- readxl::read_xlsx("CRGs.xlsx")
+mcrgs <- rbind(crgs,mrgs)
+unimulticoxinput <- dat_fpkm_filter[mcrgs$`Gene Symbol`,]
+unimulticoxinput <- na.omit(unimulticoxinput)
+unimulticoxinput <- t(unimulticoxinput)
+unimulticoxinput <- unimulticoxinput[group_filter$RNAseq样本编号,]
+unimulticoxinput <- cbind(group_filter[,c(1,2,321,322)],unimulticoxinput)
+unimulticoxinput <- unimulticoxinput[unimulticoxinput$status == "Tumor",]
+write.csv(unimulticoxinput[,-(1:2)],"UniCox_Input.csv",row.names = F)
+
+keygenes <- data.table::fread("KeyGenes.csv",data.table = F)
+boxplot <- dat_fpkm_filter[keygenes$x,]
+boxplot <- boxplot[,group_filter$RNAseq样本编号]
+boxplot <- t(boxplot)
+dat_boxplot <- cbind(group_filter$status,boxplot)
+write.csv(dat_boxplot,"1-TCGA_Boxplot.csv",row.names = F)

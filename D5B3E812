@@ -1,0 +1,26 @@
+{
+    "id": "D5B3E812",
+    "path": "E:/01program/1-模块化分析+报告+拼图-0326/1.2-数据集合并清洗-TCGA/A-PD.R",
+    "project_path": "A-PD.R",
+    "type": "r_source",
+    "hash": "1199188009",
+    "contents": "",
+    "dirty": false,
+    "created": 1714290312995.0,
+    "source_on_save": false,
+    "relative_order": 1,
+    "properties": {
+        "source_window_id": "",
+        "Source": "Source",
+        "cursorPosition": "16,0",
+        "scrollLine": "8"
+    },
+    "folds": "",
+    "lastKnownWriteTime": 1686618816,
+    "encoding": "UTF-8",
+    "collab_server": "",
+    "source_window": "",
+    "last_content_update": 1686618816,
+    "read_only": false,
+    "read_only_alternatives": []
+}
