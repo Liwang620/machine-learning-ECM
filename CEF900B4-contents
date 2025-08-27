@@ -1,0 +1,179 @@
+rm(list = ls())
+library(magrittr)
+## snp----
+snp_df <- data.table::fread("STAD_SNP.csv", data.table = F) %>% 
+  tibble::column_to_rownames("V1")
+# load("tcga.Rdata")
+pd_tcga <- data.table::fread("PD_tumor.csv", data.table = F)
+colnames(pd_tcga)[1] <- "sample"
+group_tcga <- pd_tcga[,1:2]
+colnames(group_tcga) <- c("sample","group")
+group_t <- group_tcga %>% 
+  dplyr::filter(group != "Control") %>% 
+  dplyr::mutate(sample = stringr::str_sub(sample, 1, 12))
+colnames(snp_df)
+snp_df <- snp_df %>% 
+  # dplyr::select(-X) %>% 
+  dplyr::mutate(name = stringr::str_sub(Tumor_Sample_Barcode, 1, 12)) %>% 
+  dplyr::filter(name %in% group_t$sample)
+snp_df <- snp_df[,-141]
+write.table(x = snp_df, file = "1-SNP.maf", quote = F,sep = "\t", row.names = F)
+library(maftools)
+maf = read.maf(maf = "1-SNP.maf")
+cols <- c("#EAAF8A","#79A8A9","#C1CBD7","#FFEC8B",
+          "#AF6E84","#F7DC6F","#F8C471","#E59866","#76D7C4")
+names(cols) <- levels(maf@data$Variant_Classification)
+
+mygene <- data.table::fread("MHCRDEGs.csv",data.table = F)
+mygene <- mygene$x
+
+allgene <- data.table::fread("MHCRGs.csv",data.table = F)
+allgene <- allgene$x
+pdf("4-SNP2.pdf", width = 8.1, height = 5)
+oncoplot(maf = maf, draw_titv = F, colors = cols, top = 20, fontSize = 0.6,
+         keepGeneOrder = F, sortByAnnotation = T, genes = mygene)
+dev.off()
+
+my_snp_df <- snp_df %>% 
+  dplyr::filter(Hugo_Symbol %in% allgene)
+mymaf = read.maf(maf = my_snp_df)
+pdf("3-SNP1.pdf", width = 16.5, height = 8)
+plotmafSummary(maf = mymaf, rmOutlier = TRUE, addStat = 'median', dashboard = TRUE, titvRaw = FALSE)
+dev.off()
+### km_mut_vs_nonmut
+# sample_mut <- my_snp_df$Tumor_Sample_Barcode %>% 
+#   stringr::str_sub(1, 12)
+# phen <- pd_tcga[pd_tcga$status == "Tumor",]
+# myphen <- phen %>% 
+#   dplyr::select(1,7,8) %>% 
+#   dplyr::mutate(sample = stringr::str_sub(sample, 1, 12))
+# dat_km <- group_t %>% 
+#   dplyr::select(sample) %>% 
+#   dplyr::mutate(group = dplyr::if_else(sample %in% sample_mut, "Mutation", "NonMutation")) %>% 
+#   dplyr::left_join(myphen, by = "sample")
+# dat_km$OS.time.y <- dat_km$OS.time.y/365
+# library(survival)
+# fit <- survfit(Surv(OS.time.y, OS) ~ group, data = dat_km)
+# library(survminer)
+# p <- ggsurvplot(fit,
+#                 data = dat_km, 
+#                 conf.int = FALSE,
+#                 pval.size = 7,
+#                 #risk.table=TRUE,
+#                 legend.title = "TCGA",
+#                 legend.labs = c("Mutation", "NonMutation"), # 指定图例分组标签
+#                 xlab = "Follow up time(y)", # 指定x轴标签
+#                 palette = c("#EE0000","#3B4992"),
+#                 ggtheme=theme_classic(base_size = 17),
+#                 pval = T)
+# p
+# ggsave("output/km_cox.pdf", width = 5, height = 5)
+## cnv----
+### GISTIC2----
+cnv_df <- data.table::fread("STAD_CNV.csv")
+cnv_df <- cnv_df[,c(8,3:7)]
+tumorCNV <- cnv_df[,c("sample", "Chromosome",
+                      "Start", "End", "Num_Probes", "Segment_Mean")]
+head(tumorCNV)
+tum.sam <- substr(tumorCNV$sample, 14, 16) == "01A"
+table(tum.sam)
+tumorCNV <- tumorCNV[tum.sam,]
+tumorCNV <- tumorCNV %>% 
+  dplyr::filter(stringr::str_sub(sample, 1, 12) %in% group_t$sample)
+# class(tumorCNV) <- c("spec_tbl_df", "data.frame")
+# write.table(tumorCNV, file = "output/tcga_segment_file_3.txt", sep = "\t", row.names = F, quote = F)
+### common----
+library(dplyr)
+library(GenomicRanges)
+CNV <- tumorCNV
+# Use biomaRt to obtain gene information in the gencode database
+genes <- TCGAbiolinks:::get.GRCh.bioMart(genome = "hg19") %>%
+  filter(external_gene_name != "" & chromosome_name %in% c(1:22, "X", "Y")) %>%
+  arrange(chromosome_name, start_position) %>%
+  dplyr::select(c("external_gene_name", "chromosome_name", "start_position","end_position")) %>%
+  `names<-`(c("GeneSymbol","Chr","Start","End"))
+genes_GR <- makeGRangesFromDataFrame(genes,keep.extra.columns = TRUE)
+sCNV_GR <- makeGRangesFromDataFrame(CNV, keep.extra.columns = TRUE)
+#Find LUSCerlapping interval
+hits <- findOverlaps(genes_GR, sCNV_GR, type = "within")
+sCNV_ann <- cbind(CNV[subjectHits(hits),], genes[queryHits(hits),])
+CNV1<-as.data.frame(sCNV_ann)
+CNV1$group[CNV1$Segment_Mean<(-0.3)]<-"LOSS"
+CNV1$group[CNV1$Segment_Mean>0.3]<-"GAIN"
+CNV1$G<-"Altered"
+CNV1$G[is.na(CNV1$group)]<-"Unaltered"
+save(CNV1, file = "CNV1.rda")
+library(ggplot2)
+mytheme <- 
+  theme(plot.margin = margin(0.1, 0.1, 0.1, 0.1, "cm"), # 图像
+        plot.title = element_text(size = 7)) + 
+  theme(panel.background = element_blank(), # 面板
+        panel.grid = element_blank(),
+        panel.grid.major = element_line(colour = "#ebebeb", linetype = "solid", linewidth = 0.75 * 0.47),
+        panel.grid.minor = element_line(colour = "#ebebeb", linetype = "solid", linewidth = 0.5 * 0.47),
+        panel.borde = element_rect(fill = NA, linewidth = 0.75 * 0.47)) + # 添加外框
+  theme(axis.line = element_line(linewidth = 0.75 * 0.47), # 坐标轴
+        axis.text = element_text(size = 6, color = "black"),
+        axis.title = element_text(size = 6),
+        axis.ticks = element_line(linewidth = 0.75 * 0.47)) +
+  theme(legend.key = element_rect(fill = "white", linewidth = 0.75 * 0.47), # 图注
+        legend.key.size = unit(c(0.3, 0.3), "cm"),
+        legend.title = element_text(size = 7, vjust = 1),
+        legend.text = element_text(size = 6),
+        legend.margin = margin(r = 0.08,  t = 0.03, b = 0.08, l = 0.08, unit = "cm"), # 每个图例周围的边距
+        legend.justification = c(0.5, 0.5),
+        legend.box.margin = margin(-5, -5, -5, -5), # 完整图例区域周围的边距
+        legend.spacing = unit(0, "cm"), # 图例之间的间距
+        legend.box.spacing = unit(0, "cm"), # 打印区域和图例框之间的间距
+        legend.background = element_blank(), 
+        legend.box.background = element_blank())
+dat_cnv1 <- subset(CNV1, GeneSymbol %in% mygene)
+dat_cnv1 <- dat_cnv1[,c(1,7,8,11)]
+dat_cnv1 <- na.omit(dat_cnv1)
+dat_cnv1 <- unique(dat_cnv1)
+dat_cnv1 <- as.data.frame(table(dat_cnv1[,c(2,4)]))
+dat_cnv1 <- dat_cnv1[order(dat_cnv1$Freq, decreasing = TRUE ),]
+dat_cnv1 <- dat_cnv1[dat_cnv1$GeneSymbol %in% dat_cnv1$GeneSymbol,]
+dat_cnv1$f <- dat_cnv1$Freq/length(unique(CNV1$sample)) * 100
+dat_cnv1$G <- "Amplification"
+dat_cnv1$G[dat_cnv1$group == "LOSS"] <- "Deep Deletion"
+p <- ggplot(dat_cnv1, aes(x = GeneSymbol, y = f)) +
+  geom_segment(aes(x=GeneSymbol, 
+                   xend=GeneSymbol,
+                   y=0, yend=f),
+               color="grey",size = 1.2)+
+  geom_point(aes(color = G),size = 1.5) +         # 将点的size设置大一些比较好看
+  scale_color_manual(values=c("#FDCE5C","#AF6E84")) +
+  labs(x = "", y = "CNV Frequency(%)",
+       colour = "", linetype = "", fill = "") +
+  mytheme +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5, size = 6),
+        legend.position = "top")
+p
+ggsave("1-CNV1.pdf", p,  width = 8.1, height = 5, units = "cm")
+
+dat_cnv2 <- subset(CNV1, GeneSymbol %in% mygene)
+dat_cnv2 <- dat_cnv2[,c(1,7,12)]
+dat_cnv2 <- unique(dat_cnv2)
+CNV_table <- as.data.frame.matrix(table(dat_cnv2$GeneSymbol, dat_cnv2$G))
+
+
+dat_cnv2 <- subset(dat_cnv2,GeneSymbol %in% rownames(CNV_table))
+
+dat_cnv2 <- as.data.frame(table(dat_cnv2$GeneSymbol, dat_cnv2$G))
+dat_cnv2$Freq <- (dat_cnv2$Freq/length(unique(CNV1$sample))) * 100
+
+q <- ggplot(data = dat_cnv2, mapping=aes(x = Var1, y = Freq, fill=Var2))+
+  geom_bar(stat="identity",width = 0.6,
+           position=position_dodge(0.6))+
+  scale_fill_manual(values =c("#FDCE5C","#AF6E84"))+
+  mytheme +
+  theme(axis.text = element_text(colour = "black"),
+        axis.text.x = element_text(angle = 90, hjust = 1, vjust = .5),
+        legend.position = c(0.16,0.9),legend.title = element_blank())+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5, size = 6),
+        legend.position = "top") +
+  scale_y_continuous(expand = c(0, 0))+
+  labs(x="",y="Frequency(%)")
+q
+ggsave("2-CNV2.pdf", q,  width = 8.1, height =5, units = "cm")

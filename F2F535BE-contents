@@ -1,0 +1,342 @@
+#修改记录：20240112-交互提示，文件output路径
+#修改记录：20240130-报告产出
+#修改记录：20240205-download.file函数添加method = "wininet"参数；注释掉Sys.sleep(5);基因改为读取第一列
+#修改记录：20240206-JSON文件保存筛选条件和mRNA及分子数量信息，杜绝乱码！
+#修改记录：20240220-Tarbase方法获取miRNA添加打印table(tissue)
+#修改记录：20240220-Tarbase变量名报错，miRNA筛选条件描述修改，报告基因名替换修改
+#修改记录：20240312-Tarbase输出空文件
+#修改记录：20240326-筛选条件从>改为>=，确保交互提示的范围对应筛选条件最小值和最大值
+#修改记录：20240326-第一次询问是否重新筛选时的判断条件添加tolower，支持输入大小写n
+#修改记录：20240328-修复Tarbase得到的mRNA-miRNA存在重复项的问题
+
+network<-function(miRNA_Type,gene_input,TF,miRNA,RBP,Drug){
+  library(stringr)
+  library(org.Mm.eg.db)
+  docx_list <- read.csv("input/统一替换list.csv", encoding = "UTF-8")
+  library(magrittr)
+  genes <- read.csv(gene_input, encoding = "UTF-8")
+  hubgene<-genes[, 1]
+  gene_names <- str_match(docx_list[9,2], ".*\\（(.*)\\）")[,2]
+  genesymbol <- clusterProfiler::bitr(hubgene,fromType = "SYMBOL",toType = "ENSEMBL",OrgDb = org.Mm.eg.db)
+  if (miRNA) {
+    ####miRNA-starBase----
+    if (miRNA_Type=="starBase"){
+      for(mir in hubgene){
+        file = paste("output/ceRNA/miRNA/",mir,".txt",sep = "")
+        link = paste( "https://rnasysu.com/encori/moduleDownload.php?source=agoClipRNA&type=txt&value=mm10;mRNA;all;1;0;0;1;None;",mir,sep = "")
+        download.file(link,file, method = "wininet")
+        # Sys.sleep(5)
+      }
+      file_list <- list.files("output/ceRNA/miRNA")
+      file_path <- paste("output/ceRNA/miRNA/",file_list,sep = "")
+      miRNA_Starbase <- data.frame()
+      for(i in 1:length(file_path)){
+        miRNA_ <- tryCatch(data.table::fread(file_path[i],header = T),
+                           warning = function(w) { i },
+                           error = function(e) {  return(data.table()) })
+        if (nrow(miRNA_) == 0){
+          file.remove(file_path[i])
+        }else{
+          miRNA_Starbase <- rbind(miRNA_Starbase,miRNA_)
+        }
+      }
+      #根据upstream和downstream的数据进行筛选
+      sum <- apply(miRNA_Starbase[,15:21],1,sum)
+      #展示统计结果
+      table(sum)
+      #仅保留至少3个网站中记录的相互作用对
+      cat("请根据网站记录数量筛选miRNA。阈值范围：",range(sum))
+      a<-readline("请输入miRNA筛选阈值：")
+      miRNA_mRNA <- miRNA_Starbase[which(sum>=as.numeric(a)),c(2,4)]
+      miRNA_mRNA<-miRNA_mRNA[!duplicated(miRNA_mRNA), ]
+      cat("筛选后的miRNA数量：",nrow(miRNA_mRNA))
+      Selection_miRNA_sum<-readline("是否重新筛选miRNA阈值(y/n)：")
+      if (tolower(Selection_miRNA_sum)=="n"){
+        miRNA_sum <- TRUE
+      }else{
+        miRNA_sum <- FALSE
+        while (!miRNA_sum) {
+          a<-readline("请输入miRNA新阈值：")
+          miRNA_mRNA <- miRNA_Starbase[which(sum>=as.numeric(a)),c(2,4)]
+          miRNA_mRNA<-miRNA_mRNA[!duplicated(miRNA_mRNA), ]
+          cat("筛选后的miRNA数量：",nrow(miRNA_mRNA))
+          Selection_miRNA_sum<-readline("是否重新筛选miRNA阈值(y/n)：")
+          if (tolower(Selection_miRNA_sum) == "n") {
+            miRNA_sum <- TRUE
+          }
+        }
+      }
+      miRNA_mRNA_swapped <- miRNA_mRNA[, c(2, 1)]
+      colnames(miRNA_mRNA_swapped)[1] <- "node1"
+      colnames(miRNA_mRNA_swapped)[2] <- "node2"
+      write.csv(miRNA_mRNA,"output/2-mRNA-miRNA_nodes.csv",row.names = F,quote = F)
+      attr_miRNA <- data.frame("node" = c(unique(miRNA_mRNA$miRNAname),unique(miRNA_mRNA$geneName)),
+                               "attribute" = c(rep("miRNA",length(unique(miRNA_mRNA$miRNAname))),
+                                               rep("mRNA",length(unique(miRNA_mRNA$geneName)))))
+      length(unique(miRNA_mRNA$miRNAname))
+      length(unique(miRNA_mRNA$geneName))
+      env=c("miRNA筛选阈值"=a,
+            "miRNA_mRNA配对数量"=nrow(miRNA_mRNA),
+            "去重后miRNA数量"=length(unique(miRNA_mRNA$miRNAname)),
+            "mRNA数量"=length(unique(miRNA_mRNA$geneName))) %>% data.frame() %>% tibble::rownames_to_column("item") %>% dplyr::rename(value = 2)
+      json <- jsonlite::toJSON(env, pretty = T)
+      cat(json, file = (con <- file("output/0-miRNA_mRNA_num.json", "w", encoding = "UTF-8")))
+      close(con)
+      
+      colnames(miRNA_mRNA) <- c("node1","node2")
+      write.csv(attr_miRNA,"output/2-mRNA-miRNA_attribute.csv",row.names = F,quote = F)
+      table_miRNA <- miRNA_mRNA
+      colnames(table_miRNA)[1] <- "miRNA"
+      colnames(table_miRNA)[2] <- "mRNA"
+      write.csv(table_miRNA,"output/TableS3 mRNA-miRNA.csv",row.names = F,quote = F)
+      miRNA_mRNA_num<-length(unique(miRNA_mRNA$node2))
+      miRNA_miRNA_num<-length(unique(miRNA_mRNA$node1))
+    }else{
+      ####miRNA-Tarbase----
+      miRNA_Tarbase <- data.table::fread("source/TarBase_v8_download.txt",data.table = F)
+      miRNA_MU <- miRNA_Tarbase[miRNA_Tarbase$species == "Mus musculus",]
+      mRNA_miRNA <- miRNA_MU[miRNA_MU$geneName %in% hubgene,]
+      mRNA_miRNA <-mRNA_miRNA [!duplicated(mRNA_miRNA ), ]
+      cat(paste0("direct_indirect:",sum(mRNA_miRNA$direct_indirect == "DIRECT"),'\n'))
+      cat(paste0("condition:",sum(is.na(mRNA_miRNA$condition)),'\n'))
+      cat(paste0("direct_indirect&condition:",sum(mRNA_miRNA$direct_indirect == "DIRECT" & is.na(mRNA_miRNA$condition)),'\n'))
+      cat("&tissue:")
+      print(table(mRNA_miRNA$tissue))
+      select<-readline("请输入筛选类型（direct_indirect/condition/direct_indirect&condition/tissue）：")
+      if (select=="direct_indirect"){
+        mRNA_miRNA<-mRNA_miRNA[which(mRNA_miRNA$direct_indirect == "DIRECT"),]
+      }else if(select=="condition"){
+        mRNA_miRNA<-mRNA_miRNA[which(is.na(mRNA_miRNA$condition)),]
+      }else if(select=="direct_indirect&condition"){
+        mRNA_miRNA<-mRNA_miRNA[which(mRNA_miRNA$direct_indirect == "DIRECT" & is.na(mRNA_miRNA$condition)),]
+      }else{
+        mRNA_miRNA<-mRNA_miRNA[which(mRNA_miRNA$tissue == select),]
+      }
+      mRNA_miRNA <- mRNA_miRNA[,c(2,3)]
+      mRNA_miRNA <-mRNA_miRNA [!duplicated(mRNA_miRNA ), ]
+      colnames(mRNA_miRNA)[1] <- "geneName"
+      colnames(mRNA_miRNA)[2] <- "mirna"
+      write.csv(mRNA_miRNA,"output/2-mRNA-miRNA_nodes.csv",row.names = F,quote = F)
+      miRNA_attr <- data.frame("node" = c(unique(mRNA_miRNA$geneName),unique(mRNA_miRNA$mirna)),
+                               "attribute" = c(rep("mRNA",length(unique(mRNA_miRNA$geneName))),
+                                               rep("miRNA",length(unique(mRNA_miRNA$mirna)))))
+      env=c("筛选类型" = select,
+            "miRNA_mRNA配对数量"=nrow(mRNA_miRNA),
+            "去重后miRNA数量"=length(unique(mRNA_miRNA$mirna)),
+            "mRNA数量"=length(unique(mRNA_miRNA$geneName))) %>% data.frame() %>% tibble::rownames_to_column("item") %>% dplyr::rename(value = 2)
+      json <- jsonlite::toJSON(env, pretty = T)
+      cat(json, file = (con <- file("output/0-miRNA_mRNA_num.json", "w", encoding = "UTF-8")))
+      close(con)
+      write.csv(miRNA_attr,"output/2-mRNA-miRNA_attribute.csv",row.names = F,quote = F)
+      table_miRNA <- mRNA_miRNA
+      colnames(table_miRNA)[1] <- "mRNA"
+      colnames(table_miRNA)[2] <- "miRNA"
+      write.csv(table_miRNA,"output/TableS3 mRNA-miRNA.csv",row.names = F,quote = F)
+      miRNA_mRNA_num<-length(unique(mRNA_miRNA$geneName))
+      miRNA_miRNA_num<-length(unique(mRNA_miRNA$mirna))
+    }
+  }else{
+    miRNA_mRNA_num<-""
+    miRNA_miRNA_num<-""
+  }
+  if (TF) {
+    ###mRNA-TF######
+    for (i in 1:nrow(genesymbol)){
+      a <- as.character(genesymbol[i,])
+      file = paste("output/TF/",a[1],".txt",sep = "")
+      link = paste("https://rnasysu.com/chipbase3/download.php?base_page=regulator&organism=&assembly=mm39&ref_gene_id=",a[2],"&gene_symbol=",a[1],"&protein=0&regulator_type=tf&upstream=1kb&downstream=1kb&up_down_flag=0&motif_status=Y&sample_flag=0&protein_flag=0&Ftype=xls",sep = "")
+      download.file(link,file, method = "wininet")
+    }
+    #将所有TF文件合并
+    file_list <- list.files("output/TF/")
+    file_path <- paste("output/TF/",file_list,sep = "")
+    TF_chipbase <- data.frame()
+    for(i in 1:length(file_path)){
+      TF <- data.table::fread(file_path[i],header = T)
+      if (nrow(TF) == 1){
+        file.remove(file_path[i])
+      }else{
+        TF$genesymbol <- stringr::str_extract(file_list[i],".*(?=\\.)")
+        
+        TF_chipbase <- rbind(TF_chipbase,TF)
+      }
+    }
+    #根据upstream和downstream的数据进行筛选
+    sum <- apply(TF_chipbase[,4:5],1,sum)
+    cat("请根据upstream+downstream数量筛选TF。阈值范围：",range(sum))
+    b<-readline("请输入TF筛选阈值：")
+    mRNA_TF <- TF_chipbase[which(sum>=as.numeric(b)),c(8,1)]
+    mRNA_TF <- mRNA_TF[!duplicated(mRNA_TF), ]
+    cat("筛选后的TF数量：",nrow(mRNA_TF))
+    Selection_TF_sum<-readline("是否重新筛选TF阈值(y/n)：")
+    if (tolower(Selection_TF_sum)=="n"){
+      TF_sum <- TRUE
+    }else{
+      TF_sum <- FALSE
+      while (!TF_sum) {
+        b<-readline("请输入新的TF筛选阈值：")
+        mRNA_TF <- TF_chipbase[which(sum>=as.numeric(b)),c(8,1)]
+        mRNA_TF<-mRNA_TF[!duplicated(mRNA_TF), ]
+        cat("筛选后的TF数量：",nrow(mRNA_TF))
+        Selection_TF_sum<-readline("是否重新筛选TF阈值(y/n): ")
+        if (tolower(Selection_TF_sum) == "n") {
+          TF_sum <- TRUE
+        }
+      }
+    }
+    colnames(mRNA_TF)[1] <- "node1"
+    colnames(mRNA_TF)[2] <- "node2"
+    write.csv(mRNA_TF,"output/1-mRNA-TF_nodes.csv",row.names = F,quote = F)
+    TF_attr <- data.frame("node" = c(unique(mRNA_TF$node1),unique(mRNA_TF$node2)),
+                          "attribute" = c(rep("mRNA",length(unique(mRNA_TF$node1))),
+                                          rep("TF",length(unique(mRNA_TF$node2)))))
+    env=c("TF筛选阈值"=b,
+          "TF_mRNA配对数量"=nrow(mRNA_TF),
+          "TF去重后数量："=length(unique(mRNA_TF$node2)),
+          "mRNA数量："=length(unique(mRNA_TF$node1))) %>% data.frame() %>% tibble::rownames_to_column("item") %>% dplyr::rename(value = 2)
+    json <- jsonlite::toJSON(env, pretty = T)
+    cat(json, file = (con <- file("output/0-TF_mRNA_num.json", "w", encoding = "UTF-8")))
+    close(con)
+    
+    length(unique(mRNA_TF$node1))
+    length(unique(mRNA_TF$node2))
+    write.csv(TF_attr,"output/1-mRNA-TF_attribute.csv",row.names = F,quote = F)
+    table_TF <- mRNA_TF
+    colnames(table_TF)[1] <- "mRNA"
+    colnames(table_TF)[2] <- "TF"
+    write.csv(table_TF,"output/TableS2 mRNA-TF.csv",row.names = F,quote = F)
+    TF_mRNA_num<-length(unique(mRNA_TF$node1))
+    TF_TF_num<-length(unique(mRNA_TF$node2))
+  }else{
+    TF_mRNA_num<-""
+    TF_TF_num<-""
+  }
+  if(RBP){
+    ###starBase v3.0: mRNA-RBP######
+    #下载速度由网速决定，可能会稍微慢了一些。
+    for(rbp in hubgene){
+      file = paste("output/RBP/",rbp,".txt",sep = "")
+      link = paste( "https://rnasysu.com/encori/moduleDownload.php?source=rbpClipRNA&type=txt&value=mm10;mRNA;all;1;0;",rbp,sep = "")
+      download.file(link,file, method = "wininet")
+      # Sys.sleep(5)
+    }
+    #将所有RBP文件合并
+    file_list <- list.files("output/RBP/")
+    file_path <- paste("output/RBP/",file_list,sep = "")
+    RBP_Starbase <- data.frame()
+    for(i in 1:length(file_path)){
+      RBP <- data.table::fread(file_path[i],header = T)
+      if (nrow(RBP) == 0){
+        file.remove(file_path[i])
+      }else{
+        RBP$genesymbol <- stringr::str_extract(file_list[i],".*(?=\\.)")
+        RBP_Starbase <- rbind(RBP_Starbase,RBP)
+      }
+    }
+    #根据upstream和downstream的数据进行筛选
+    # sum <- apply(RBP_Starbase[,4:5],1,sum)
+    cat("请根据clusterNum数量筛选RBP。阈值范围：",range(RBP_Starbase$clusterNum))
+    c<-readline("请输入RBP筛选阈值：")
+    mRNA_RBP <- RBP_Starbase[which(RBP_Starbase$clusterNum>=as.numeric(c)),c(3,1)]
+    mRNA_RBP<-mRNA_RBP[!duplicated(mRNA_RBP), ]
+    cat("筛选得到的RBP数量：",nrow(mRNA_RBP))
+    Selection_RBP_sum<-readline("是否重新筛选RBP(y/n)：")
+    if (tolower(Selection_RBP_sum)=="n"){
+      RBP_sum <- TRUE
+    }else{
+      RBP_sum <- FALSE
+      while (!RBP_sum) {
+        c<-readline("请输入新的RBP筛选阈值： ")
+        mRNA_RBP <- RBP_Starbase[which(RBP_Starbase$clusterNum>=as.numeric(c)),c(3,1)]
+        mRNA_RBP<-mRNA_RBP[!duplicated(mRNA_RBP), ]
+        cat("筛选得到的RBP数量：",nrow(mRNA_RBP))
+        Selection_RBP_sum<-readline("是否重新筛选RBP(y/n)：")
+        if (tolower(Selection_RBP_sum) == "n") {
+          RBP_sum <- TRUE
+        }
+      }
+    }
+    colnames(mRNA_RBP)[1] <- "node1"
+    colnames(mRNA_RBP)[2] <- "node2"
+    write.csv(mRNA_RBP,"output/3-mRNA-RBP_nodes.csv",row.names = F,quote = F)
+    RBP_attr <- data.frame("node" = c(unique(mRNA_RBP$node1),unique(mRNA_RBP$node2)),
+                           "attribute" = c(rep("mRNA",length(unique(mRNA_RBP$node1))),
+                                           rep("RBP",length(unique(mRNA_RBP$node2)))))
+    length(unique(mRNA_RBP$node1))
+    length(unique(mRNA_RBP$node2))
+    env=c("RBP筛选阈值"=c,
+          "RBP_miRNA配对数量"=nrow(mRNA_RBP),
+          "RBP去重后数量: "=length(unique(mRNA_RBP$node2)),
+          "mRNA数量: "=length(unique(mRNA_RBP$node1))) %>% data.frame() %>% tibble::rownames_to_column("item") %>% dplyr::rename(value = 2)
+    json <- jsonlite::toJSON(env, pretty = T)
+    cat(json, file = (con <- file("output/0-RBP_mRNA_num.json", "w", encoding = "UTF-8")))
+    close(con)
+    write.csv(RBP_attr,"output/3-mRNA-RBP_attribute.csv",row.names = F,quote = F)
+    table_RBP <- mRNA_RBP
+    colnames(table_RBP)[1] <- "mRNA"
+    colnames(table_RBP)[2] <- "RBP"
+    write.csv(table_RBP,"output/TableS4 mRNA-RBP.csv",row.names = F,quote = F)
+    RBP_mRNA_num<-length(unique(mRNA_RBP$node1))
+    RBP_RBP_num<-length(unique(mRNA_RBP$node2))
+  }else{
+    RBP_mRNA_num<-""
+    RBP_RBP_num<-""
+  }
+  Drug_mRNA_num<-""
+  Drug_Drug_num<-""
+  ####报告产出----
+  library(officer)
+  library(dplyr)
+  officer_doc<-officer::read_docx(path = "source/10.1-调控网络_Cytoscape.docx")
+  doc_replaced<-officer_doc %>%
+    body_replace_all_text(old_value = "PPPPE",
+                          new_value = docx_list[5,2],
+                          only_at_cursor = F
+    )%>%
+    body_replace_all_text(old_value = "PPPP_S",
+                          new_value = docx_list[6,2],
+                          only_at_cursor = F
+    )%>%
+    body_replace_all_text(old_value = "AAAAA",
+                          new_value = paste0(TF_mRNA_num),
+                          only_at_cursor = F
+    )%>%
+    body_replace_all_text(old_value = "BBBBB",
+                          new_value = paste0(TF_TF_num),
+                          only_at_cursor = F
+    )%>%
+    body_replace_all_text(old_value = "CCCCC",
+                          new_value = paste0(miRNA_mRNA_num),
+                          only_at_cursor = F
+    )%>%
+    body_replace_all_text(old_value = "DDDDD",
+                          new_value = paste0(miRNA_miRNA_num),
+                          only_at_cursor = F
+    )%>%
+    body_replace_all_text(old_value = "EEEEE",
+                          new_value = paste0(RBP_mRNA_num),
+                          only_at_cursor = F
+    )%>%
+    body_replace_all_text(old_value = "FFFFF",
+                          new_value = paste0(RBP_RBP_num),
+                          only_at_cursor = F
+    )%>%
+    body_replace_all_text(old_value = "NNNNN",
+                          new_value = paste0(Drug_mRNA_num),
+                          only_at_cursor = F
+    )%>%
+    body_replace_all_text(old_value = "GGGGG",
+                          new_value = docx_list[9,2],
+                          only_at_cursor = F
+    )%>%
+    body_replace_all_text(old_value = "HHHHH",
+                          new_value = paste0(Drug_Drug_num),
+                          only_at_cursor = F
+    )%>%
+    body_replace_all_text(old_value = "ZZZZZ",
+                          new_value = gene_names,
+                          only_at_cursor = F
+    )
+  print(doc_replaced,target="output/10.1-调控网络_Cytoscape.docx")
+  return(hubgene)
+}
